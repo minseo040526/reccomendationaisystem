@@ -126,7 +126,7 @@ with tab1:
     with c1:
         budget = st.number_input("총 예산(₩)", 0, 200000, 20000, step=1000)
     with c2:
-        st.caption("예산에 따라 세트 구성 수량이 1~3개로 자동 조정됩니다. #인기 가중치 적용됨.")
+        st.caption("예산에 따라 세트 구성 수량이 1~3개로 자동 조정됩니다.")
 
     sweet = st.slider("당도 (0~5)", 0, 5, 2)
 
@@ -144,7 +144,7 @@ with tab1:
             st.session_state["selected_tags_prev"] = cur
 
     selected_tags_disp = st.multiselect(
-        "취향 태그 (최대 3개) — CSV에 있는 태그만 노출",
+        "취향 태그 (최대 3개)",
         [f"#{t}" for t in sorted({t for row in MENU["tags_list"] for t in row if t})],
         key="selected_tags_disp",
         on_change=enforce_max3
@@ -203,4 +203,4 @@ with tab3:
             st.dataframe(MENU[["category","name","price","sweetness","tags"]].reset_index(drop=True), hide_index=True)
 
 st.divider()
-st.caption("© 2025 Lucy Bakery – Demo (No login/DB) · #인기 가중치 반영 · 태그 최대 3개")
+st.caption("© 2025 Lucy Bakery")
