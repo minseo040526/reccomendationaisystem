@@ -5,33 +5,71 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title='Lucy Bakery Menu Recommendation (Fixed Demo, Hashtag Patch)', layout='wide')
+st.set_page_config(page_title='Lucy Bakery Menu Recommendation (Robust Tags)', layout='wide')
 
+# ---------- DATA ----------
 @st.cache_data
 def load_menu(path: str):
-    df = pd.read_csv(path)
-    required = {"category","name","price","sweetness","tags"}
-    miss = required - set(df.columns)
-    if miss:
-        st.error(f"menu.csv에 필요한 컬럼 누락: {miss}")
-        st.stop()
-    def to_list(s):
-        if isinstance(s, str) and s.strip():
-            return [re.sub(r'#', '', t).strip() for t in s.split(',') if t.strip()]
-        return []
-    df["tags_list"] = df["tags"].apply(to_list)
+    # Read as string to avoid dtype surprises
+    df = pd.read_csv(path, dtype=str).fillna("")
+    # Normalize known columns
+    rename_map = {c:c.strip() for c in df.columns}
+    df.rename(columns=rename_map, inplace=True)
+    required = ["category","name","price","sweetness"]
+    for col in required:
+        if col not in df.columns:
+            st.error(f"menu.csv에 '{col}' 컬럼이 필요합니다.")
+            st.stop()
+
+    # --- Robust tag ingestion ---
+    # Collect everything after the known columns into one 'tags_joined'
+    known = set(required + ["tags"])
+    extra_cols = [c for c in df.columns if c not in known]
+    if "tags" in df.columns:
+        base = df["tags"].astype(str)
+    else:
+        base = pd.Series([""]*len(df))
+    if extra_cols:
+        joined = base.copy()
+        for c in extra_cols:
+            joined = joined + "," + df[c].astype(str)
+        tags_joined = joined
+    else:
+        tags_joined = base
+
+    # Split by comma/semicolon/pipe/slash/space and remove ALL '#'
+    def to_list(s: str):
+        tokens = re.split(r"[,\|/; ]+", str(s))
+        out = []
+        for t in tokens:
+            t = re.sub(r"#", "", t).strip()
+            if t and t.lower() != "nan":
+                out.append(t)
+        return out
+    tags_list = tags_joined.apply(to_list)
+
+    # Cast numeric fields
+    df_num = df.copy()
+    df_num["price"] = pd.to_numeric(df_num["price"], errors="coerce").fillna(0).astype(int)
+    df_num["sweetness"] = pd.to_numeric(df_num["sweetness"], errors="coerce").fillna(0).astype(int)
+    df_num["tags_list"] = tags_list
+
+    # popularity flag
     def is_popular(tags):
-        tags = set([t.lstrip('#') for t in tags])
-        return ("인기" in tags) or ("인기메뉴" in tags) or ("popular" in tags)
-    df["popular"] = df["tags_list"].apply(is_popular)
-    df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0).astype(int)
-    df["sweetness"] = pd.to_numeric(df["sweetness"], errors="coerce").fillna(0).astype(int)
-    return df
+        s = set(tags)
+        return ("인기" in s) or ("인기메뉴" in s) or ("popular" in s)
+    df_num["popular"] = df_num["tags_list"].apply(is_popular)
+    return df_num
 
 MENU = load_menu("menu.csv")
 BAKERY_CATS = {"빵","샌드위치","샐러드","디저트"}
 DRINK_CATS = {"커피","라떼","에이드","스무디","티"}
 
+# Tag universe (from data)
+ALL_TAGS = sorted({t for row in MENU["tags_list"] for t in row if t})
+DISPLAY_TAGS = [f"#{t}" for t in ALL_TAGS] if ALL_TAGS else []
+
+# ---------- UTILS ----------
 def gen_order_code():
     return f"LUCY-{dt.datetime.now().strftime('%Y%m%d')}-{str(int(time.time()))[-4:]}"
 
@@ -84,10 +122,12 @@ def show_combo(idx, items, total, budget):
                 tagtxt = ', '.join([f"#{t}" for t in r['tags_list']]) if r['tags_list'] else '-'
                 st.text(tagtxt)
 
-st.title("Lucy Bakery Menu Recommendation – Demo (Hashtag Fixed)")
+# ---------- HEADER ----------
+st.title("AI 메뉴 추천 서비스")
 
+# Router: confirmation
 if st.session_state.get("view") == "confirm":
-    st.success(f"주문 완료!  주문번호: **{st.session_state.get('order_code','-')}**")
+    st.success(f"주문 완료! 주문번호: **{st.session_state.get('order_code','-')}**")
     total = st.session_state.get("order_total", 0)
     names = st.session_state.get("order_names", [])
     if names:
@@ -102,6 +142,7 @@ if st.session_state.get("view") == "confirm":
         st.rerun()
     st.stop()
 
+# ---------- TABS ----------
 tab1, tab2, tab3 = st.tabs(["🥐 베이커리 추천", "☕ 음료 추천", "📋 메뉴판"])
 
 with tab1:
@@ -125,9 +166,14 @@ with tab1:
         else:
             st.session_state["selected_tags_prev"] = cur
 
+    st.caption("※ 태그가 안 보이면 '캐시 비우기' 버튼을 누르고 새로고침하세요.")
+    if st.button("캐시 비우기"):
+        st.cache_data.clear()
+        st.rerun()
+
     selected_tags_disp = st.multiselect(
-        "취향 태그 (최대 3개) — CSV에 있는 태그만 노출",
-        [f"#{t}" for t in sorted({t for row in MENU["tags_list"] for t in row if t})],
+        "취향 태그 (최대 3개)",
+        [f"#{t}" for t in ALL_TAGS],
         key="selected_tags_disp",
         on_change=enforce_max3
     )
@@ -158,7 +204,6 @@ with tab1:
 
 with tab2:
     st.subheader("카테고리 + 당도만으로 간단 추천 (분리 동작)")
-    DRINK_CATS = {"커피","라떼","에이드","스무디","티"}
     drink_cat = st.selectbox("음료 카테고리", sorted(DRINK_CATS))
     drink_sweet = st.slider("원하는 당도 (0~5)", 0, 5, 3, key="drink_sweet")
     if st.button("음료 추천받기 ☕️"):
@@ -183,5 +228,5 @@ with tab3:
             st.dataframe(MENU[["category","name","price","sweetness","tags"]].reset_index(drop=True), hide_index=True)
 
 st.divider()
-st.caption("© 2025 Lucy Bakery )")
+st.caption("© 2025 Lucy Bakery")
 
