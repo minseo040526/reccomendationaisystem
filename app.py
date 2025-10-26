@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 import os, time, itertools, re
 import datetime as dt
@@ -6,6 +5,15 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title='Lucy Bakery Menu Recommendation (No-Cache Tags)', layout='wide')
+
+# 💡 수정 1: 핵심 태그 목록 정의 및 UI 표시용 태그 목록 설정
+# 너무 많은 태그를 줄이기 위해, 이 목록에 포함된 태그만 UI에 표시합니다.
+CORE_TAGS = [
+    "인기", "달콤한", "짭짤한", "고소한", "든든한", 
+    "가벼운", "단백한", "바삭한", "초코", "치즈", 
+    "산미", "커피향", "상큼한", "향긋한", "부드러운", "시원한", "따뜻한"
+]
+
 
 # ---------- DATA (NO CACHE) ----------
 def load_menu(path: str):
@@ -31,22 +39,31 @@ def load_menu(path: str):
         for t in tokens:
             t = re.sub(r"#", "", t).strip()
             if t and t.lower() != "nan":
-                out.append(t)
+                # 💡 수정 2: 추출된 태그가 CORE_TAGS에 포함된 경우에만 리스트에 추가합니다.
+                # '인기메뉴', 'popular' 등은 'popular' 컬럼에서 처리되므로 필터링 가능
+                if t in CORE_TAGS: 
+                    out.append(t)
+                elif t.lower() in {"인기메뉴", "popular"}: # popular 컬럼에 반영하기 위해 임시로 포함
+                    out.append("인기") 
         return out
 
     df = base.copy()
     df["tags_list"] = tags_joined.apply(to_list)
     df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0).astype(int)
     df["sweetness"] = pd.to_numeric(df["sweetness"], errors="coerce").fillna(0).astype(int)
-    df["popular"] = df["tags_list"].apply(lambda tags: any(t in {"인기","인기메뉴","popular"} for t in set(tags)))
+    # '인기' 태그는 popular 컬럼으로 분리하여 사용되므로 CORE_TAGS에 남겨도 됩니다.
+    df["popular"] = df["tags_list"].apply(lambda tags: "인기" in set(tags)) 
+    
     return df
 
 MENU = load_menu("menu.csv")
 BAKERY_CATS = {"빵","샌드위치","샐러드","디저트"}
 DRINK_CATS = {"커피","라떼","에이드","스무디","티"}
 
-# Tag list for UI
-ALL_TAGS = sorted({t for row in MENU["tags_list"] for t in row if t})
+# 💡 수정 3: CORE_TAGS를 기반으로 UI 태그 목록을 생성합니다.
+# '인기' 태그는 별도의 체크박스로 사용하는 경우가 많으므로 선택 목록에서 제외하거나, 그대로 둘 수 있습니다. 
+# 여기서는 그대로 두고, UI에서 '인기'를 선택하면 가중치를 더하는 방식으로 유지합니다.
+ALL_TAGS = sorted(list(set(CORE_TAGS))) # CORE_TAGS에 정의된 순서와 무관하게 정렬
 DISPLAY_TAGS = [f"#{t}" for t in ALL_TAGS]
 
 # ---------- UTILS ----------
@@ -148,7 +165,7 @@ with tab1:
 
     selected_tags_disp = st.multiselect(
         "취향 태그 (최대 3개)",
-        DISPLAY_TAGS,
+        DISPLAY_TAGS, # 💡 수정된 CORE_TAGS 기반의 DISPLAY_TAGS가 사용됨
         key="selected_tags_disp",
         on_change=enforce_max3
     )
@@ -179,6 +196,7 @@ with tab1:
 
 with tab2:
     st.subheader("카테고리 + 당도만으로 간단 추천 (분리 동작)")
+    # 💡 수정 4: DRINK_CATS는 기존과 동일하게 사용되지만, menu.csv에 음료 데이터가 추가되어야 정상 동작합니다.
     drink_cat = st.selectbox("음료 카테고리", sorted(DRINK_CATS))
     drink_sweet = st.slider("원하는 당도 (0~5)", 0, 5, 3, key="drink_sweet")
     if st.button("음료 추천받기 ☕️"):
@@ -204,4 +222,3 @@ with tab3:
 
 st.divider()
 st.caption("© 2025 Lucy Bakery")
-
