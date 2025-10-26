@@ -18,7 +18,7 @@ def load_menu(path: str):
     # normalize tags -> list without leading '#', stripped
     def to_list(s):
         if isinstance(s, str) and s.strip():
-            return [re.sub(r'^#', '', t).strip() for t in s.split(',') if t.strip()]
+            return [re.sub(r'#', '', t).strip() for t in s.split(',') if t.strip()]
         return []
     df["tags_list"] = df["tags"].apply(to_list)
     # popularity flag
