@@ -5,69 +5,49 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title='Lucy Bakery Menu Recommendation (Robust Tags)', layout='wide')
+st.set_page_config(page_title='Lucy Bakery Menu Recommendation (No-Cache Tags)', layout='wide')
 
-# ---------- DATA ----------
-@st.cache_data
+# ---------- DATA (NO CACHE) ----------
 def load_menu(path: str):
-    # Read as string to avoid dtype surprises
-    df = pd.read_csv(path, dtype=str).fillna("")
-    # Normalize known columns
-    rename_map = {c:c.strip() for c in df.columns}
-    df.rename(columns=rename_map, inplace=True)
-    required = ["category","name","price","sweetness"]
-    for col in required:
-        if col not in df.columns:
-            st.error(f"menu.csv에 '{col}' 컬럼이 필요합니다.")
-            st.stop()
+    # Read as raw strings; keep all extra columns after col 4 as tags
+    df_raw = pd.read_csv(path, dtype=str, keep_default_na=False)
 
-    # --- Robust tag ingestion ---
-    # Collect everything after the known columns into one 'tags_joined'
-    known = set(required + ["tags"])
-    extra_cols = [c for c in df.columns if c not in known]
-    if "tags" in df.columns:
-        base = df["tags"].astype(str)
-    else:
-        base = pd.Series([""]*len(df))
-    if extra_cols:
-        joined = base.copy()
-        for c in extra_cols:
-            joined = joined + "," + df[c].astype(str)
-        tags_joined = joined
-    else:
-        tags_joined = base
+    if df_raw.shape[1] < 5:
+        st.error("menu.csv 형식 오류: 최소 5개 컬럼( category, name, price, sweetness, tags... )이 필요합니다.")
+        st.stop()
 
-    # Split by comma/semicolon/pipe/slash/space and remove ALL '#'
+    base = df_raw.iloc[:, :4].copy()
+    base.columns = ["category", "name", "price", "sweetness"]
+
+    # Merge every column from the 5th to the end into one tags string
+    tags_joined = df_raw.iloc[:, 4:].apply(
+        lambda row: ",".join([str(x) for x in row if str(x).strip() != ""]),
+        axis=1
+    )
+
     def to_list(s: str):
-        tokens = re.split(r"[,\|/; ]+", str(s))
+        tokens = re.split(r"[,\|/; ]+", str(s))  # allow comma/semicolon/pipe/slash/space
         out = []
         for t in tokens:
             t = re.sub(r"#", "", t).strip()
             if t and t.lower() != "nan":
                 out.append(t)
         return out
-    tags_list = tags_joined.apply(to_list)
 
-    # Cast numeric fields
-    df_num = df.copy()
-    df_num["price"] = pd.to_numeric(df_num["price"], errors="coerce").fillna(0).astype(int)
-    df_num["sweetness"] = pd.to_numeric(df_num["sweetness"], errors="coerce").fillna(0).astype(int)
-    df_num["tags_list"] = tags_list
-
-    # popularity flag
-    def is_popular(tags):
-        s = set(tags)
-        return ("인기" in s) or ("인기메뉴" in s) or ("popular" in s)
-    df_num["popular"] = df_num["tags_list"].apply(is_popular)
-    return df_num
+    df = base.copy()
+    df["tags_list"] = tags_joined.apply(to_list)
+    df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0).astype(int)
+    df["sweetness"] = pd.to_numeric(df["sweetness"], errors="coerce").fillna(0).astype(int)
+    df["popular"] = df["tags_list"].apply(lambda tags: any(t in {"인기","인기메뉴","popular"} for t in set(tags)))
+    return df
 
 MENU = load_menu("menu.csv")
 BAKERY_CATS = {"빵","샌드위치","샐러드","디저트"}
 DRINK_CATS = {"커피","라떼","에이드","스무디","티"}
 
-# Tag universe (from data)
+# Tag list for UI
 ALL_TAGS = sorted({t for row in MENU["tags_list"] for t in row if t})
-DISPLAY_TAGS = [f"#{t}" for t in ALL_TAGS] if ALL_TAGS else []
+DISPLAY_TAGS = [f"#{t}" for t in ALL_TAGS]
 
 # ---------- UTILS ----------
 def gen_order_code():
@@ -103,10 +83,10 @@ def recommend_combos(df, chosen_tags, sweet, budget, topk=3):
     out, seen = [], set()
     for items, total, score, r in combos:
         sig = tuple(sorted(items["name"].tolist()))
-        if sig in seen: 
+        if sig in seen:
             continue
         seen.add(sig); out.append((items, total, score, r))
-        if len(out) == topk: 
+        if len(out) == topk:
             break
     return out
 
@@ -125,9 +105,9 @@ def show_combo(idx, items, total, budget):
 # ---------- HEADER ----------
 st.title("AI 메뉴 추천 서비스")
 
-# Router: confirmation
+# Confirmation page
 if st.session_state.get("view") == "confirm":
-    st.success(f"주문 완료! 주문번호: **{st.session_state.get('order_code','-')}**")
+    st.success(f"주문 완료!  주문번호: **{st.session_state.get('order_code','-')}**")
     total = st.session_state.get("order_total", 0)
     names = st.session_state.get("order_names", [])
     if names:
@@ -166,14 +146,9 @@ with tab1:
         else:
             st.session_state["selected_tags_prev"] = cur
 
-    st.caption("※ 태그가 안 보이면 '캐시 비우기' 버튼을 누르고 새로고침하세요.")
-    if st.button("캐시 비우기"):
-        st.cache_data.clear()
-        st.rerun()
-
     selected_tags_disp = st.multiselect(
         "취향 태그 (최대 3개)",
-        [f"#{t}" for t in ALL_TAGS],
+        DISPLAY_TAGS,
         key="selected_tags_disp",
         on_change=enforce_max3
     )
@@ -193,7 +168,7 @@ with tab1:
                 for i, (items, total, score, r) in enumerate(results, start=1):
                     show_combo(i, items, total, budget)
                     with st.form(key=f'order_form_{i}', clear_on_submit=False):
-                        submit = st.form_submit_button(f"세트 {i} 주문하기 (데모)")
+                        submit = st.form_submit_button(f"세트 {i} 주문하기")
                         if submit:
                             oc = gen_order_code()
                             st.session_state["order_code"] = oc
@@ -225,7 +200,7 @@ with tab3:
     else:
         st.info("앱 폴더에 menu_board_1.png, menu_board_2.png 넣으면 이미지로 표시됩니다.")
         with st.expander("데이터 요약(관리자용) 보기"):
-            st.dataframe(MENU[["category","name","price","sweetness","tags"]].reset_index(drop=True), hide_index=True)
+            st.dataframe(MENU[["category","name","price","sweetness"]].reset_index(drop=True), hide_index=True)
 
 st.divider()
 st.caption("© 2025 Lucy Bakery")
